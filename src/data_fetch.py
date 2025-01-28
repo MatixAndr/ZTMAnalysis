@@ -4,8 +4,22 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+import time
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
 
 load_dotenv()
+
+def get_coordinates(address):
+    geolocator = Nominatim(user_agent="ztm_analysis")
+    try:
+        location = geolocator.geocode(f"{address}, Warsaw, Poland")
+        if location:
+            return location.latitude, location.longitude
+        else:
+            raise ValueError("Address not found")
+    except GeocoderTimedOut:
+        raise ValueError("Geocoding service timed out")
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371
@@ -18,7 +32,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     return R * c
 
-def fetch_nearby_buses(my_lat, my_lon, radius_km=10):
+def fetch_nearby_buses(my_lat, my_lon, radius_km=10, line_filter=None):
     url = "https://api.um.warszawa.pl/api/action/busestrams_get/"
     
     api_key = os.getenv('WARSAW_ZTM_API_KEY')
@@ -40,6 +54,9 @@ def fetch_nearby_buses(my_lat, my_lon, radius_km=10):
         
         for vehicle in data.get('result', []):
             try:
+                if line_filter and vehicle.get('Lines') != line_filter:
+                    continue
+                    
                 bus_lat = float(vehicle.get('Lat'))
                 bus_lon = float(vehicle.get('Lon'))
                 
@@ -57,11 +74,41 @@ def fetch_nearby_buses(my_lat, my_lon, radius_km=10):
         print(f"Error fetching data: {e}")
         return []
 
+def monitor_buses(address, line_number, radius_km=10):
+    try:
+        lat, lon = get_coordinates(address)
+        print(f"\nMonitoring buses from: {address}")
+        print(f"Coordinates: {lat}, {lon}")
+        print(f"Looking for line: {line_number}")
+        print(f"Radius: {radius_km}km")
+        print("\nPress Ctrl+C to stop monitoring...\n")
+        
+        while True:
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print(f"🚌 Monitoring line {line_number} from {address}")
+            print(f"Last update: {datetime.now().strftime('%H:%M:%S')}\n")
+            
+            buses = fetch_nearby_buses(lat, lon, radius_km, line_number)
+            if buses:
+                for bus in buses:
+                    distance = bus['distance_km']
+                    direction = bus.get('Direction', 'N/A')
+                    print(f"→ Bus {bus.get('Lines', 'N/A')} is {distance}km away")
+                    print(f"  Direction: {direction}")
+                    print(f"  Brigade: {bus.get('Brigade', 'N/A')}\n")
+            else:
+                print(f"No buses of line {line_number} found within {radius_km}km")
+            
+            time.sleep(60)  # Update every minute
+            
+    except KeyboardInterrupt:
+        print("\nMonitoring stopped.")
+    except ValueError as e:
+        print(f"Error: {e}")
+
 if __name__ == "__main__":
-    warsaw_lat = 52.231838
-    warsaw_lon = 21.005995
+    address = input("Enter your address in Warsaw: ")
+    line_number = input("Enter bus line number to monitor: ")
+    radius = float(input("Enter radius in kilometers (default 10): ") or 10)
     
-    buses = fetch_nearby_buses(warsaw_lat, warsaw_lon)
-    print(f"Found {len(buses)} buses within 10km radius:")
-    for bus in buses:
-        print(f"Bus {bus.get('Lines', 'N/A')}: {bus['distance_km']}km away")
+    monitor_buses(address, line_number, radius)
