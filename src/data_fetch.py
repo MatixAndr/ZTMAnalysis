@@ -1,114 +1,60 @@
-import requests
-from math import radians, sin, cos, sqrt, atan2
-import json
-from datetime import datetime
-from dotenv import load_dotenv
+import csv
 import os
-import time
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
+import requests
+from datetime import datetime
+from rich import print
 
-load_dotenv()
+# Globalny licznik plików i nazwa bazowa
+current_file_counter = 1
+BASE_FILENAME = "bus_data_180"
 
-def get_coordinates(address):
-    geolocator = Nominatim(user_agent="ztm_analysis")
-    try:
-        location = geolocator.geocode(f"{address}, Warsaw, Poland")
-        if location:
-            return location.latitude, location.longitude
-        else:
-            raise ValueError("Address not found")
-    except GeocoderTimedOut:
-        raise ValueError("Geocoding service timed out")
+def get_current_filename():
+    return f"data/raw/{BASE_FILENAME}_{current_file_counter}.csv"
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371
-
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
+def save_raw_data(raw_data: dict):
+    global current_file_counter
     
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1-a))
-    return R * c
+    os.makedirs("data/raw", exist_ok=True)
+    
+    # Sprawdź rozmiar aktualnego pliku
+    current_file = get_current_filename()
+    if os.path.exists(current_file):
+        file_size = os.path.getsize(current_file) / (1024 * 1024)  # w MB
+        if file_size >= 100:
+            current_file_counter += 1
+            current_file = get_current_filename()
 
-def fetch_nearby_buses(my_lat, my_lon, radius_km=10, line_filter=None):
-    url = "https://api.um.warszawa.pl/api/action/busestrams_get/"
+    # Nagłówki CSV (dostosuj do struktury danych z API)
+    fieldnames = ["Time", "Lines", "Lon", "Lat", "Brigade", "VehicleNumber", "Direction"]
+
+    # Tryb: 'a' (append) jeśli plik istnieje, 'w' (write) jeśli nowy
+    mode = 'a' if os.path.exists(current_file) else 'w'
     
-    api_key = os.getenv('WARSAW_ZTM_API_KEY')
-    if not api_key:
-        raise ValueError("Please set WARSAW_ZTM_API_KEY environment variable")
-    
-    params = {
-        'resource_id': 'f2e5503e-927d-4ad3-9500-4ab9e55deb59',
-        'apikey': api_key,
-        'type': 1  # 1 for buses, 2 for trams
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
+    with open(current_file, mode, newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         
-        nearby_buses = []
+        # Dodaj nagłówek tylko dla nowego pliku
+        if mode == 'w':
+            writer.writeheader()
         
-        for vehicle in data.get('result', []):
-            try:
-                if line_filter and vehicle.get('Lines') != line_filter:
-                    continue
-                    
-                bus_lat = float(vehicle.get('Lat'))
-                bus_lon = float(vehicle.get('Lon'))
-                
-                distance = haversine_distance(my_lat, my_lon, bus_lat, bus_lon)
-                
-                if distance <= radius_km:
-                    vehicle['distance_km'] = round(distance, 2)
-                    nearby_buses.append(vehicle)
-            except (ValueError, TypeError):
-                continue
-        
-        return nearby_buses
+        # Zapisz wszystkie rekordy
+        for bus in raw_data.get('result', []):
+            writer.writerow({
+                "Time": datetime.now().isoformat(),
+                "Lines": bus.get('Lines'),
+                "Lon": bus.get('Lon'),
+                "Lat": bus.get('Lat'),
+                "Brigade": bus.get('Brigade'),
+                "VehicleNumber": bus.get('VehicleNumber'),
+                "Direction": bus.get('Direction')
+            })
     
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
-        return []
+    # print(f"[bold yellow]Zapisano do {current_file}[/bold yellow]")
 
-def monitor_buses(address, line_number, radius_km=10):
-    try:
-        lat, lon = get_coordinates(address)
-        print(f"\nMonitoring buses from: {address}")
-        print(f"Coordinates: {lat}, {lon}")
-        print(f"Looking for line: {line_number}")
-        print(f"Radius: {radius_km}km")
-        print("\nPress Ctrl+C to stop monitoring...\n")
-        
-        while True:
-            os.system('cls' if os.name == 'nt' else 'clear')
-            print(f"🚌 Monitoring line {line_number} from {address}")
-            print(f"Last update: {datetime.now().strftime('%H:%M:%S')}\n")
-            
-            buses = fetch_nearby_buses(lat, lon, radius_km, line_number)
-            if buses:
-                for bus in buses:
-                    distance = bus['distance_km']
-                    direction = bus.get('Direction', 'N/A')
-                    print(f"→ Bus {bus.get('Lines', 'N/A')} is {distance}km away")
-                    print(f"  Direction: {direction}")
-                    print(f"  Brigade: {bus.get('Brigade', 'N/A')}\n")
-            else:
-                print(f"No buses of line {line_number} found within {radius_km}km")
-            
-            time.sleep(60)  # Update every minute
-            
-    except KeyboardInterrupt:
-        print("\nMonitoring stopped.")
-    except ValueError as e:
-        print(f"Error: {e}")
-
-if __name__ == "__main__":
-    address = input("Enter your address in Warsaw: ")
-    line_number = input("Enter bus line number to monitor: ")
-    radius = float(input("Enter radius in kilometers (default 10): ") or 10)
+def fetch_data(api_key: str, line: str = "180") -> dict:
+    url = f"https://api.um.warszawa.pl/api/action/busestrams_get/?resource_id=XXX&apikey={api_key}&type=1&line={line}"
+    response = requests.get(url)
     
-    monitor_buses(address, line_number, radius)
+    if response.status_code == 200:
+        return {"result": response.json()['result']}  # Dopasuj strukturę do potrzeb CSV
+    return {"result": []}

@@ -2,13 +2,14 @@ from setuptools import setup, find_packages
 
 setup(
     name="ZTMAnalysis",
-    version="0.1",
+    version="1.0",
     packages=find_packages(),
     install_requires=[
-        "numpy",
+        "requests",
         "pandas",
         "scikit-learn",
-        "jupyter"
+        "rich",
+        "tqdm",
     ],
     description="Tool for analyzing and predicting bus arrival times",
     author="MateuszAndruszkiewicz",
